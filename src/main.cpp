@@ -30,24 +30,25 @@ class MazeGenerator : public olc::PixelGameEngine {
                 m_grid.emplace_back(col, row, cell_width, cell_height);
             }
         }
-        cell_at(0, 0).set_visited();
+    }
 
+    bool OnUserCreate() override {
+        srand(static_cast<unsigned>(time(0)));
+        cell_at(0, 0).set_visited();
         visitor.push(&cell_at(0, 0));
 
         open_set.push_back(&cell_at(0, 0));
         m_goal = m_grid.at(rand() % m_grid.size());
         m_goal.set_visited();
         cell_at(0, 0).m_f_score = heuristic(cell_at(0, 0), m_goal);
-    }
-
-    bool OnUserCreate() override {
-        srand(static_cast<unsigned>(time(0)));
+        cell_at(0, 0).m_g_score = 0;
+        draw(this);
         return true;
     }
 
     bool OnUserUpdate(float elapsed_time) override {
         if (!visitor.empty()) {
-            // generate maze
+            //     // generate maze
             draw(this);
             auto& current_cell = visitor.top();
             current_cell->draw(this, olc::GREEN);
@@ -83,15 +84,12 @@ class MazeGenerator : public olc::PixelGameEngine {
             }
         } else {
             // solve maze
-            auto score = [&](Cell* cell) {
-                return std::abs(cell->m_x - m_goal.m_x) * std::abs(cell->m_y - m_goal.m_y);
-            };
-
             if (!open_set.empty()) {
                 auto current_best_cell = open_set.front();
                 current_best_cell->draw(this, olc::MAGENTA);
                 m_goal.draw(this, olc::RED);
                 if (current_best_cell->m_x == m_goal.m_x && current_best_cell->m_y == m_goal.m_y) {
+                    reconstrucs_path({current_best_cell->m_x, current_best_cell->m_y});
                     return true;
                 }
 
@@ -99,13 +97,11 @@ class MazeGenerator : public olc::PixelGameEngine {
                 open_set.pop_back();
                 auto neighbours = get_neighbours(current_best_cell->m_x, current_best_cell->m_y);
                 for (auto& neighbour : neighbours) {
-                    // double dist = olc::v_2d<int32_t>(current_best_cell->m_x - neighbour.m_x,
-                    //                                      current_best_cell->m_y - neighbour.m_y)
-                    //                   .mag();
                     auto tentative_gScore = current_best_cell->m_g_score + 1;
                     if (tentative_gScore < neighbour->m_g_score) {
 
-                        // cameFrom[neighbor] := current;
+                        m_came_from.insert(
+                            {{neighbour->m_x, neighbour->m_y}, {current_best_cell->m_x, current_best_cell->m_y}});
                         neighbour->m_g_score = tentative_gScore;
                         neighbour->m_f_score = tentative_gScore + heuristic(*neighbour, m_goal);
 
@@ -114,12 +110,10 @@ class MazeGenerator : public olc::PixelGameEngine {
                             })) {
 
                             open_set.push_back(neighbour);
-                            std::ranges::push_heap(open_set, [&](auto c1, auto c2) { return score(c1) < score(c2); });
+                            std::ranges::push_heap(open_set,
+                                                   [&](auto c1, auto c2) { return c1->m_f_score < c2->m_f_score; });
                         }
                     }
-
-                    // if neighbor not in openSet
-                    //      openSet.add(neighbor)
                 }
             }
         }
@@ -183,6 +177,18 @@ class MazeGenerator : public olc::PixelGameEngine {
         return std::abs(cell.m_x - goal.m_x) * std::abs(cell.m_y - goal.m_y);
     }
 
+    void reconstrucs_path(std::pair<int32_t, int32_t> current) {
+        while (m_came_from.contains(current)) {
+            std::pair<int32_t, int32_t> previous = m_came_from.at(current);
+            DrawLine((current.first * (CELL_WIDTH + WALL_WIDTH)) + CELL_WIDTH / 2,
+                     (current.second * (CELL_HIGHT + WALL_WIDTH)) + CELL_HIGHT / 2,
+                     (previous.first * (CELL_WIDTH + WALL_WIDTH)) + CELL_WIDTH / 2,
+                     (previous.second * (CELL_HIGHT + WALL_WIDTH)) + CELL_HIGHT / 2,
+                     olc::YELLOW);
+            current = previous;
+        }
+    }
+
   private:
     int32_t m_cols;
     int32_t m_rows;
@@ -193,6 +199,7 @@ class MazeGenerator : public olc::PixelGameEngine {
 
     // solving the maze
     std::vector<Cell*> open_set;
+    std::map<std::pair<int32_t, int32_t>, std::pair<int32_t, int32_t>> m_came_from;
     Cell m_goal;
 };
 
