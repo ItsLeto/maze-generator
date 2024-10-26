@@ -1,6 +1,7 @@
 #define OLC_PGE_APPLICATION
 #include "olcPixelGameEngine.h"
 
+#include "cell.hpp"
 #include <array>
 #include <bitset>
 #include <cstdint>
@@ -10,187 +11,117 @@
 constexpr static auto COLS{30};
 constexpr static auto ROWS{20};
 constexpr static auto CELL_WIDTH{10};
+constexpr static auto CELL_HIGHT{10};
 constexpr static auto WALL_WIDTH{1};
 constexpr static auto WINDOW_WIDTH{COLS * (CELL_WIDTH + WALL_WIDTH)};
 constexpr static auto WINDOW_HIGHT{ROWS * (CELL_WIDTH + WALL_WIDTH)};
 
-enum class Direction { North, East, South, West, NUM };
-enum class Wall { North, East, South, West, NUM };
-
-class Cell {
-  public:
-    Cell(std::size_t x, std::size_t y) : m_pos{x, y} {};
-
-    std::vector<Direction> get_neighbours() {
-        std::vector<Direction> neighbours;
-        if (m_pos.y > 0) {
-            neighbours.emplace_back(Direction::North);
-        }
-        if (m_pos.x < COLS - 1) {
-            neighbours.emplace_back(Direction::East);
-        }
-        if (m_pos.y < ROWS - 1) {
-            neighbours.emplace_back(Direction::South);
-        }
-        if (m_pos.x > 0) {
-            neighbours.emplace_back(Direction::West);
-        }
-        return neighbours;
-    }
-
-    void draw(olc::PixelGameEngine* pge, olc::Pixel color = olc::WHITE) {
-
-        if (!m_walls.test(std::to_underlying(Wall::East))) {
-            pge->FillRect(m_pos.x * (m_width + WALL_WIDTH) + m_width,
-                          m_pos.y * (m_width + WALL_WIDTH),
-                          WALL_WIDTH,
-                          m_width);
-        }
-        if (!m_walls.test(std::to_underlying(Wall::South))) {
-            pge->FillRect(m_pos.x * (m_width + WALL_WIDTH),
-                          m_pos.y * (m_width + WALL_WIDTH) + m_width,
-                          m_width,
-                          WALL_WIDTH);
-        }
-
-        pge->FillRect(m_pos.x * (m_width + WALL_WIDTH),
-                      m_pos.y * (m_width + WALL_WIDTH),
-                      m_width,
-                      m_width,
-                      (m_visited) ? color : olc::BLUE);
-    }
-
-    void remove_wall(Wall wall) {
-        m_walls.set(std::to_underlying(wall), false);
-    }
-
-    olc::v_2d<std::size_t> m_pos;
-    std::size_t m_width{CELL_WIDTH};
-    bool m_visited{false};
-    std::bitset<std::to_underlying(Wall::NUM)> m_walls{std::bitset<4>().set()};
-};
-
 class MazeGenerator : public olc::PixelGameEngine {
 
   public:
-    MazeGenerator() {
+    MazeGenerator(std::size_t cols, std::size_t rows, std::size_t cell_width, std::size_t cell_height) :
+        m_cols(cols), m_rows(rows) {
         sAppName.assign("MazeGenerator");
+        m_grid.reserve(cols * rows);
+        for (std::size_t row : std::views::iota(std::size_t(0), m_rows)) {
+            for (std::size_t col : std::views::iota(std::size_t(0), m_cols)) {
+                m_grid.emplace_back(col, row, cell_width, cell_height);
+            }
+        }
+        cell_at(0, 0).set_visited();
+        visitor.push(&cell_at(0, 0));
     }
 
     bool OnUserCreate() override {
         srand(static_cast<unsigned>(time(0)));
-
-        m_maze.reserve(COLS * ROWS);
-        for (std::size_t row : std::views::iota(0, ROWS)) {
-            for (std::size_t col : std::views::iota(0, COLS)) {
-                m_maze.emplace_back(col, row);
-            }
-        }
-
-        m_maze.front().m_visited = true;
-
-        for (auto& cell : m_maze) {
-            cell.draw(this);
-        }
-
-        m_visitor.push(&m_maze.front());
-
         return true;
     }
 
     bool OnUserUpdate(float elapsed_time) override {
-        // std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (m_visitor.empty()) {
-            m_maze.at(0).draw(this, olc::RED);
+        if (visitor.empty()) {
             return true;
         }
 
-        for (auto& cell : m_maze) {
-            cell.draw(this);
-        }
-
-        auto& current_cell = m_visitor.top();
+        draw(this);
+        auto& current_cell = visitor.top();
         current_cell->draw(this, olc::GREEN);
 
-        // get neighbours
-        auto neighbours = current_cell->get_neighbours();
-
-        // filter for unvisited neighbours
-        std::erase_if(neighbours, [&](Direction dir) {
-            std::size_t offset_x{0};
-            std::size_t offset_y{0};
-            switch (dir) {
-                case Direction::North:
-                    offset_y = -1;
-                    break;
-                case Direction::East:
-                    offset_x = 1;
-                    break;
-                case Direction::West:
-                    offset_x = -1;
-                    break;
-                case Direction::South:
-                    offset_y = 1;
-                    break;
-                default:
-                    break;
-            }
-            return m_maze.at((current_cell->m_pos.x + offset_x) + (current_cell->m_pos.y + offset_y) * COLS).m_visited;
-        });
-
-        // choose a random neighbour
-        if (!neighbours.empty()) {
-
-            auto random_neighbour = neighbours.at(rand() % neighbours.size());
-
-            // connect the cells
-            switch (random_neighbour) {
+        auto unvisited_neighbours = get_unvisited_neighbours(current_cell->m_x, current_cell->m_y);
+        if (!unvisited_neighbours.empty()) {
+            auto [random_neighbour_direction, random_neighbour] =
+                unvisited_neighbours.at(rand() % unvisited_neighbours.size());
+            random_neighbour.set_visited();
+            visitor.push(&random_neighbour);
+            switch (random_neighbour_direction) {
                 case Direction::North: {
-                    auto chosen_neighbour = &m_maze.at((current_cell->m_pos.x) + (current_cell->m_pos.y + -1) * COLS);
-                    chosen_neighbour->remove_wall(Wall::South);
-                    chosen_neighbour->m_visited = true;
-                    m_visitor.push(chosen_neighbour);
-                    current_cell->remove_wall(Wall::North);
+                    random_neighbour.remove_wall(Direction::South);
+                    current_cell->remove_wall(Direction::North);
                 } break;
                 case Direction::East: {
-                    auto chosen_neighbour = &m_maze.at((current_cell->m_pos.x + 1) + (current_cell->m_pos.y) * COLS);
-                    chosen_neighbour->remove_wall(Wall::West);
-                    chosen_neighbour->m_visited = true;
-                    m_visitor.push(chosen_neighbour);
-                    current_cell->remove_wall(Wall::East);
+                    random_neighbour.remove_wall(Direction::West);
+                    current_cell->remove_wall(Direction::East);
                 } break;
                 case Direction::West: {
-                    auto chosen_neighbour = &m_maze.at((current_cell->m_pos.x - 1) + (current_cell->m_pos.y) * COLS);
-                    chosen_neighbour->remove_wall(Wall::East);
-                    chosen_neighbour->m_visited = true;
-                    m_visitor.push(chosen_neighbour);
-                    current_cell->remove_wall(Wall::West);
+                    random_neighbour.remove_wall(Direction::East);
+                    current_cell->remove_wall(Direction::West);
                 } break;
                 case Direction::South: {
-                    auto chosen_neighbour = &m_maze.at((current_cell->m_pos.x) + (current_cell->m_pos.y + 1) * COLS);
-                    chosen_neighbour->remove_wall(Wall::North);
-                    chosen_neighbour->m_visited = true;
-                    m_visitor.push(chosen_neighbour);
-                    current_cell->remove_wall(Wall::South);
+                    random_neighbour.remove_wall(Direction::North);
+                    current_cell->remove_wall(Direction::South);
                 } break;
                 default:
                     break;
             }
         } else {
-            m_visitor.pop();
+            visitor.pop();
         }
 
         return true;
     }
 
   private:
-    std::vector<Cell> m_maze;
+    void draw(olc::PixelGameEngine* pge) {
+        for (auto& cell : m_grid) {
+            cell.draw(pge);
+        }
+    }
 
-    std::stack<Cell*> m_visitor;
+    Cell& cell_at(std::size_t row, std::size_t col) {
+        return m_grid.at(index_from(row, col));
+    }
+
+    std::vector<std::pair<Direction, Cell&>> get_unvisited_neighbours(std::size_t col, std::size_t row) {
+        std::vector<std::pair<Direction, Cell&>> neighbours;
+        if (row > 0 && !cell_at(row - 1, col).is_visited()) {
+            neighbours.emplace_back(Direction::North, cell_at(row - 1, col));
+        }
+        if (col < m_cols - 1 && !cell_at(row, col + 1).is_visited()) {
+            neighbours.emplace_back(Direction::East, cell_at(row, col + 1));
+        }
+        if (row < m_rows - 1 && !cell_at(row + 1, col).is_visited()) {
+            neighbours.emplace_back(Direction::South, cell_at(row + 1, col));
+        }
+        if (col > 0 && !cell_at(row, col - 1).is_visited()) {
+            neighbours.emplace_back(Direction::West, cell_at(row, col - 1));
+        }
+
+        return neighbours;
+    }
+
+    std::size_t index_from(std::size_t row, std::size_t col) {
+        return col + row * m_cols;
+    }
+
+  private:
+    std::size_t m_cols;
+    std::size_t m_rows;
+    std::vector<Cell> m_grid;
+
+    std::stack<Cell*> visitor;
 };
 
 int main(int argc, char const* argv[]) {
-    MazeGenerator maze_generator;
+    MazeGenerator maze_generator(COLS, ROWS, CELL_WIDTH, CELL_HIGHT);
     if (maze_generator.Construct(WINDOW_WIDTH, WINDOW_HIGHT, 4, 4)) {
         maze_generator.Start();
     }
